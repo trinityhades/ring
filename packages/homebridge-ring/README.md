@@ -129,7 +129,7 @@ If you are having issues with your cameras in the Home app, please see the [Came
 
 If you are having issues with Notifications, please see the [Notification Troubleshooting Wiki](https://github.com/dgreif/ring/wiki/Notification-Troubleshooting)
 
-Note: Although homebridge has support for HomeKit Secure Video (HKSV), I will not be adding it to this plugin. Please see [this issue](https://github.com/dgreif/ring/issues/860#issuecomment-1021584211) for more details.
+Note: HomeKit Secure Video (HKSV) support is being introduced as an experimental, opt-in feature behind `enableHksv`. Expect incremental improvements as recording pipeline work continues.
 
 ### Supported Devices via Ring Alarm and Ring Smart Lighting Hubs
 

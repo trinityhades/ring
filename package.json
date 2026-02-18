@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "run": "cd /Users/trinity/ring/packages/homebridge-ring && npm run dev:run",
     "build": "turbo run build",
     "dev": "turbo run dev --parallel",
     "test": "turbo run test",

@@ -9,6 +9,12 @@ export const controlCenterDisplayName = 'homebridge-ring'
 
 export interface RingPlatformConfig extends RingApiOptions {
   alarmOnEntryDelay?: boolean
+  enableHksv?: boolean
+  disableHksvOnBattery?: boolean
+  hksvPrebufferLengthMs?: number
+  hksvFragmentLengthMs?: number
+  hksvMaxRecordingSeconds?: number
+  cameraVideoCodec?: 'h264_videotoolbox' | 'libx264'
   beamDurationSeconds?: number
   ffmpegPath?: string
   hideLightGroups?: boolean
@@ -18,6 +24,7 @@ export interface RingPlatformConfig extends RingApiOptions {
   hideCameraSirenSwitch?: boolean
   hideInHomeDoorbellSwitch?: boolean
   hideAlarmSirenSwitch?: boolean
+  externalCameraIdSalt?: string
   hideDeviceIds?: string[]
   nightModeBypassFor: AlarmMode
   onlyDeviceTypes?: string[]

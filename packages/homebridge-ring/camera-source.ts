@@ -1,5 +1,6 @@
 import type { RingCamera } from 'ring-client-api'
 import { hap } from './hap.ts'
+import type { RingPlatformConfig } from './config.ts'
 import type { SrtpOptions } from '@homebridge/camera-utils'
 import {
   generateSrtpOptions,
@@ -7,7 +8,10 @@ import {
   RtpSplitter,
 } from '@homebridge/camera-utils'
 import type {
+  CameraRecordingConfiguration,
+  CameraRecordingDelegate,
   CameraStreamingDelegate,
+  RecordingPacket,
   PrepareStreamCallback,
   PrepareStreamRequest,
   SnapshotRequest,
@@ -58,6 +62,38 @@ function getSessionConfig(srtpOptions: SrtpOptions) {
       remoteMasterSalt: srtpOptions.srtpSalt,
     },
     profile: 1,
+  }
+}
+
+function* parseMp4Boxes(data: Buffer): Generator<{ type: string; box: Buffer }> {
+  let offset = 0
+
+  while (offset + 8 <= data.length) {
+    const shortLength = data.readUInt32BE(offset)
+    let boxLength = shortLength
+    let headerLength = 8
+
+    if (shortLength === 1) {
+      if (offset + 16 > data.length) {
+        break
+      }
+
+      boxLength = Number(data.readBigUInt64BE(offset + 8))
+      headerLength = 16
+    } else if (shortLength === 0) {
+      break
+    }
+
+    if (boxLength < headerLength || offset + boxLength > data.length) {
+      break
+    }
+
+    const box = data.subarray(offset, offset + boxLength),
+      type = box.subarray(4, 8).toString('ascii')
+
+    yield { type, box }
+
+    offset += boxLength
   }
 }
 
@@ -324,16 +360,28 @@ class StreamingSessionWrapper {
   }
 }
 
-export class CameraSource implements CameraStreamingDelegate {
+export class CameraSource
+  implements CameraStreamingDelegate, CameraRecordingDelegate
+{
   public controller
   private sessions: { [sessionKey: string]: StreamingSessionWrapper } = {}
   private cachedSnapshot?: Buffer
   private ringCamera
 
-  constructor(ringCamera: RingCamera) {
+  private recordingActive = false
+  private recordingConfiguration?: CameraRecordingConfiguration
+  private closedRecordingStreams = new Set<number>()
+  private recordingWaiters = new Map<number, () => void>()
+  private activeRecordingSessions = new Map<number, () => void>()
+
+  constructor(ringCamera: RingCamera, config: RingPlatformConfig) {
     this.ringCamera = ringCamera
-    this.controller = new hap.CameraController({
-      cameraStreamCount: 10,
+
+    const enableHksv =
+      config.enableHksv && !(config.disableHksvOnBattery && ringCamera.hasBattery)
+
+    const controllerOptions: any = {
+      cameraStreamCount: enableHksv ? 1 : 10,
       delegate: this,
       streamingOptions: {
         supportedCryptoSuites: [SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
@@ -373,7 +421,65 @@ export class CameraSource implements CameraStreamingDelegate {
           ],
         },
       },
-    })
+    }
+
+    if (enableHksv) {
+      const prebufferLength = Math.max(config.hksvPrebufferLengthMs ?? 4000, 4000),
+        fragmentLength = config.hksvFragmentLengthMs ?? 4000
+
+      controllerOptions.recording = {
+        delegate: this,
+        options: {
+          prebufferLength,
+          overrideEventTriggerOptions: [
+            (hap as any).EventTriggerOption.MOTION,
+            (hap as any).EventTriggerOption.DOORBELL,
+          ],
+          mediaContainerConfiguration: {
+            type: (hap as any).MediaContainerType.FRAGMENTED_MP4,
+            fragmentLength,
+          },
+          video: {
+            type: (hap as any).VideoCodecType.H264,
+            parameters: {
+              profiles: [
+                H264Profile.BASELINE,
+                H264Profile.MAIN,
+                H264Profile.HIGH,
+              ],
+              levels: [
+                H264Level.LEVEL3_1,
+                H264Level.LEVEL3_2,
+                H264Level.LEVEL4_0,
+              ],
+            },
+            resolutions: [
+              [1920, 1080, 30],
+              [1280, 720, 30],
+              [640, 480, 30],
+              [320, 240, 15],
+            ],
+          },
+          audio: {
+            codecs: {
+              type: (hap as any).AudioRecordingCodecType.AAC_LC,
+              samplerate: [
+                (hap as any).AudioRecordingSamplerate.KHZ_16,
+                (hap as any).AudioRecordingSamplerate.KHZ_24,
+                (hap as any).AudioRecordingSamplerate.KHZ_32,
+                (hap as any).AudioRecordingSamplerate.KHZ_48,
+              ],
+              audioChannels: 1,
+              bitrateMode: (hap as any).AudioBitrate.VARIABLE,
+            },
+          },
+        },
+      }
+
+      logInfo(`HKSV services enabled for ${this.ringCamera.name}`)
+    }
+
+    this.controller = new hap.CameraController(controllerOptions)
   }
 
   private previousLoadSnapshotPromise?: Promise<any>
@@ -581,5 +687,237 @@ export class CameraSource implements CameraStreamingDelegate {
     }
 
     callback()
+  }
+
+  updateRecordingActive(active: boolean) {
+    this.recordingActive = active
+    logInfo(`HKSV recording ${active ? 'enabled' : 'disabled'} for ${this.ringCamera.name}`)
+  }
+
+  updateRecordingConfiguration(
+    configuration: CameraRecordingConfiguration | undefined,
+  ) {
+    this.recordingConfiguration = configuration
+    this.closedRecordingStreams.clear()
+    this.recordingWaiters.forEach((wake) => wake())
+    this.recordingWaiters.clear()
+
+    if (configuration) {
+      logInfo(
+        `HKSV recording configuration updated for ${this.ringCamera.name} (fragmentLength=${configuration.mediaContainerConfiguration.fragmentLength}ms, prebuffer=${configuration.prebufferLength}ms)`,
+      )
+      return
+    }
+
+    logInfo(`HKSV recording configuration cleared for ${this.ringCamera.name}`)
+  }
+
+  async *handleRecordingStreamRequest(
+    streamId: number,
+  ): AsyncGenerator<RecordingPacket> {
+    logInfo(`HKSV recording stream requested for ${this.ringCamera.name} (streamId=${streamId})`)
+
+    if (!this.recordingActive || !this.recordingConfiguration) {
+      logDebug(
+        `HKSV recording request ignored for ${this.ringCamera.name} because recording is not active or configured`,
+      )
+      return
+    }
+
+    this.closedRecordingStreams.delete(streamId)
+
+    const packetQueue: RecordingPacket[] = []
+    let waitForPacket: (() => void) | undefined,
+      pendingData = Buffer.alloc(0),
+      initBoxes: Buffer[] = [],
+      initSent = false,
+      fragmentBoxes: Buffer[] = [],
+      closed = false
+
+    const fragmentLengthMs =
+      this.recordingConfiguration.mediaContainerConfiguration.fragmentLength
+
+    const wake = () => {
+        waitForPacket?.()
+        waitForPacket = undefined
+      },
+      enqueuePacket = (packet: RecordingPacket) => {
+        packetQueue.push(packet)
+        wake()
+      },
+      closeSession = () => {
+        if (closed) {
+          return
+        }
+
+        closed = true
+        this.closedRecordingStreams.add(streamId)
+        this.activeRecordingSessions.delete(streamId)
+        wake()
+      }
+
+    this.recordingWaiters.set(streamId, closeSession)
+    this.activeRecordingSessions.set(streamId, closeSession)
+
+    let liveCall: StreamingSession | undefined
+  let keyFrameTimer: ReturnType<typeof setInterval> | undefined
+
+    try {
+      liveCall = await this.ringCamera.startLiveCall()
+
+      liveCall.onCallEnded.pipe(take(1)).subscribe(() => {
+        closeSession()
+      })
+
+      await liveCall.startTranscoding({
+        video: [
+          '-vcodec',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-tune',
+          'zerolatency',
+          '-pix_fmt',
+          'yuv420p',
+          '-profile:v',
+          'baseline',
+          '-level:v',
+          '3.1',
+          '-g',
+          '30',
+          '-keyint_min',
+          '30',
+          '-sc_threshold',
+          '0',
+        ],
+        output: [
+          '-movflags',
+          'frag_keyframe+empty_moov+default_base_moof',
+          '-frag_duration',
+          `${fragmentLengthMs * 1000}`,
+          '-fflags',
+          '+genpts',
+          '-reset_timestamps',
+          '1',
+          '-f',
+          'mp4',
+          'pipe:1',
+        ],
+        stdoutCallback: (data) => {
+          if (closed) {
+            return
+          }
+
+          pendingData = Buffer.concat([pendingData, data])
+
+          let consumed = 0
+
+          for (const { type, box } of parseMp4Boxes(pendingData)) {
+            consumed += box.length
+
+            if (!initSent) {
+              initBoxes.push(box)
+
+              if (type === 'moov') {
+                enqueuePacket({
+                  data: Buffer.concat(initBoxes),
+                  isLast: false,
+                })
+                initBoxes = []
+                initSent = true
+              }
+
+              continue
+            }
+
+            if (type === 'styp') {
+              fragmentBoxes = [box]
+              continue
+            }
+
+            if (type === 'moof') {
+              fragmentBoxes = fragmentBoxes.length ? [...fragmentBoxes, box] : [box]
+              continue
+            }
+
+            if (!fragmentBoxes.length) {
+              continue
+            }
+
+            fragmentBoxes.push(box)
+
+            if (type === 'mdat') {
+              enqueuePacket({
+                data: Buffer.concat(fragmentBoxes),
+                isLast: false,
+              })
+              fragmentBoxes = []
+            }
+          }
+
+          if (consumed > 0) {
+            pendingData = pendingData.subarray(consumed)
+          }
+        },
+      })
+
+      liveCall.requestKeyFrame()
+      keyFrameTimer = setInterval(() => {
+        if (closed || initSent) {
+          if (keyFrameTimer) {
+            clearInterval(keyFrameTimer)
+            keyFrameTimer = undefined
+          }
+          return
+        }
+
+        liveCall?.requestKeyFrame()
+      }, 2000)
+
+      while (!closed) {
+        if (packetQueue.length) {
+          yield packetQueue.shift()!
+          continue
+        }
+
+        await new Promise<void>((resolve) => {
+          waitForPacket = resolve
+          this.recordingWaiters.set(streamId, closeSession)
+        })
+      }
+    } catch (e) {
+      logError(`Failed to stream HKSV recording for ${this.ringCamera.name}`)
+      logError(e)
+      closeSession()
+    } finally {
+      this.recordingWaiters.delete(streamId)
+      this.activeRecordingSessions.delete(streamId)
+
+      if (keyFrameTimer) {
+        clearInterval(keyFrameTimer)
+      }
+
+      if (liveCall) {
+        liveCall.stop()
+      }
+    }
+  }
+
+  closeRecordingStream(streamId: number, reason: any) {
+    logInfo(
+      `HKSV recording stream closed for ${this.ringCamera.name} (streamId=${streamId}, reason=${String(reason)})`,
+    )
+
+    this.closedRecordingStreams.add(streamId)
+    this.activeRecordingSessions.get(streamId)?.()
+    this.recordingWaiters.get(streamId)?.()
+    this.activeRecordingSessions.delete(streamId)
+    this.recordingWaiters.delete(streamId)
+  }
+
+  acknowledgeStream(streamId: number) {
+    logDebug(
+      `HKSV recording stream acknowledged for ${this.ringCamera.name} (streamId=${streamId})`,
+    )
   }
 }

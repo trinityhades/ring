@@ -12,7 +12,15 @@ The [ring-client-api](./packages/ring-client-api/) is a TypeScript package desig
 
 ## `homebridge-ring`
 
-[homebridge-ring](./packages/homebridge-ring/) allows users to easily integrate Ring products into Apple HomeKit via [homebridge](https://homebridge.io/)
+[homebridge-ring](./packages/homebridge-ring/) allows users to easily integrate Ring products into Apple HomeKit via [homebridge](https://homebridge.io/).
+
+This fork, created by [TrinityHades](https://github.com/TrinityHades), adds **HomeKit Secure Video (HKSV)** support to Ring cameras, allowing users to store camera recordings securely in iCloud and view them through the Apple Home app. This provides many of the benefits of Ring's premium subscription without the cost, along with deeper integration into the Apple ecosystem.
+
+> [!WARNING]
+> **Please be aware of the following before using this plugin:**
+> - Using this plugin may violate Ring's Terms of Service — use it at your own risk.
+> - Some features may not work as expected due to limitations in Ring's API or future changes made by Ring.
+> - Even though HomeKit Secure Video is end-to-end encrypted, your video data is still transmitted through Ring's servers. Be sure to understand the privacy implications before using this plugin.
 
 ## Examples
 

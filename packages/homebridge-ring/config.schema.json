@@ -21,6 +21,53 @@
         "type": "boolean",
         "description": "If enabled, HomeKit will register a delayed entry event as a triggered alarm. Useful if you want to know as soon as someone opens a door with the alarm armed"
       },
+      "enableHksv": {
+        "title": "Enable HKSV (Experimental)",
+        "type": "boolean",
+        "description": "Enables HomeKit Secure Video services for supported Ring cameras. This implementation is currently in-progress."
+      },
+      "disableHksvOnBattery": {
+        "title": "Disable HKSV On Battery Cameras",
+        "type": "boolean",
+        "description": "If enabled, HKSV is disabled on battery-powered cameras to reduce battery and network impact.",
+        "default": true
+      },
+      "hksvPrebufferLengthMs": {
+        "title": "HKSV Prebuffer Length (ms)",
+        "type": "integer",
+        "minimum": 4000,
+        "maximum": 16000,
+        "description": "How much pre-event video is retained for HKSV. Minimum is 4000ms."
+      },
+      "hksvFragmentLengthMs": {
+        "title": "HKSV Fragment Length (ms)",
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 8000,
+        "description": "Target recording fragment duration for HKSV fragmented MP4 output."
+      },
+      "hksvMaxRecordingSeconds": {
+        "title": "HKSV Max Recording Seconds",
+        "type": "integer",
+        "minimum": 5,
+        "maximum": 300,
+        "description": "Optional safety cap for a single HKSV recording stream duration."
+      },
+      "cameraVideoCodec": {
+        "title": "Camera Video Codec",
+        "type": "string",
+        "description": "Preferred ffmpeg H.264 encoder for camera paths.",
+        "oneOf": [
+          {
+            "title": "h264_videotoolbox",
+            "enum": ["h264_videotoolbox"]
+          },
+          {
+            "title": "libx264",
+            "enum": ["libx264"]
+          }
+        ]
+      },
       "hideLightGroups": {
         "title": "Hide Light Groups",
         "type": "boolean",
@@ -51,6 +98,11 @@
         "title": "Hide Alarm Siren Switch",
         "type": "boolean",
         "description": "Hides switch that allows you to turn on the siren of the Ring Alarm.  Enable this is your Siri commands keep setting off the siren and you don't care about having the switch"
+      },
+      "externalCameraIdSalt": {
+        "title": "External Camera ID Salt",
+        "type": "string",
+        "description": "Advanced recovery option: changing this forces new HomeKit identities for Ring camera external accessories."
       },
       "showPanicButtons": {
         "title": "Show Panic Buttons",
@@ -153,6 +205,12 @@
       "expandable": true,
       "items": [
         "alarmOnEntryDelay",
+        "enableHksv",
+        "disableHksvOnBattery",
+        "hksvPrebufferLengthMs",
+        "hksvFragmentLengthMs",
+        "hksvMaxRecordingSeconds",
+        "cameraVideoCodec",
         "hideLightGroups",
         "hideDoorbellSwitch",
         "hideCameraLight",
@@ -160,6 +218,7 @@
         "hideCameraSirenSwitch",
         "hideInHomeDoorbellSwitch",
         "hideAlarmSirenSwitch",
+        "externalCameraIdSalt",
         "showPanicButtons",
         "nightModeBypassFor",
         "avoidSnapshotBatteryDrain",
